@@ -1,0 +1,5 @@
+# Единые LF-переводы строк: Dockerfile, Caddyfile и SQL уходят на Linux-сервер.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.ico binary

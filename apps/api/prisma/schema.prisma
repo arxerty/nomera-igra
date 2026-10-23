@@ -1,0 +1,711 @@
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Tier {
+  common
+  uncommon
+  rare
+  epic
+  legendary
+  mythic
+}
+
+model User {
+  id                   String    @id @default(cuid())
+  telegramId           BigInt    @unique
+  username             String?
+  firstName            String
+  lastName             String?
+  photoUrl             String?
+  locale               String    @default("ru")
+  soundEnabled         Boolean   @default(true)
+  hapticsEnabled       Boolean   @default(true)
+  notificationsEnabled Boolean   @default(true)
+  /// Бот получил 403 при отправке — пользователь заблокировал бота.
+  botBlocked           Boolean   @default(false)
+  chips                Int       @default(0)
+  /// Купленные и бонусные попытки (бесплатная по таймеру сюда не входит).
+  rolls                Int       @default(0)
+  lastFreeRollAt       DateTime?
+  streakDay            Int       @default(0)
+  /// Ключ игровых суток последнего полученного ежедневного бонуса, "YYYY-MM-DD".
+  lastDailyClaim       String?
+  totalRolls           Int       @default(0)
+  referredById         String?
+  /// Докупленные места в гараже машин сверх базовых из конфига.
+  extraGarageSlots     Int       @default(0)
+  /// Эксклюзивные окраски, выданные игроку (id из конфига).
+  unlockedPaints       String[]  @default([])
+  /// Выбранный титул — id полученной ачивки.
+  title                String?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+  lastSeenAt           DateTime  @default(now())
+
+  referredBy    User?            @relation("Referrals", fields: [referredById], references: [id])
+  referrals     User[]           @relation("Referrals")
+  plates        Plate[]
+  ownerships    PlateOwnership[]
+  listings      Listing[]        @relation("Seller")
+  purchases     Listing[]        @relation("Buyer")
+  offersSent    TradeOffer[]     @relation("OfferFrom")
+  offersGot     TradeOffer[]     @relation("OfferTo")
+  ledger        LedgerEntry[]
+  rollLogs      RollLog[]
+  payments      Payment[]
+  questProgress QuestProgress[]
+  cars          UserCar[]
+  carOwnerships CarOwnership[]
+  carListings   CarListing[]     @relation("CarSeller")
+  carPurchases  CarListing[]     @relation("CarBuyer")
+  trips         CarTrip[]
+  raceEntry     RaceQueueEntry?
+  auctionBids   AuctionBid[]
+  exhibitionEntries ExhibitionEntry[]
+  clubMember    ClubMember?
+  dreamMasks    DreamMask[]
+  achievements  UserAchievement[]
+}
+
+/// Каждый номер существует в игре в одном экземпляре. Проданный системе номер
+/// остаётся строкой с ownerId = null и может выпасть снова — паспорт сохраняется.
+model Plate {
+  id            String    @id @default(cuid())
+  /// "А123ВС77"
+  key           String    @unique
+  /// "А123ВС" — для поиска по маске
+  body          String
+  letters       String
+  number        Int
+  region        String
+  tier          Tier
+  value         Int
+  traits        String[]
+  bonuses       String[]
+  ownerId       String?
+  acquiredAt    DateTime?
+  firstRolledAt DateTime  @default(now())
+  rolledTimes   Int       @default(1)
+  /// Номер разыгрывается на аукционе: ничей, но выбить его нельзя.
+  reserved      Boolean   @default(false)
+
+  owner      User?            @relation(fields: [ownerId], references: [id])
+  ownerships PlateOwnership[]
+  listings   Listing[]
+  tradeItems TradeItem[]
+  rollLogs   RollLog[]
+  car        UserCar?
+  auctions   Auction[]
+
+  @@index([ownerId, tier])
+  @@index([ownerId, acquiredAt])
+  @@index([body])
+  @@index([region])
+}
+
+enum AcquireVia {
+  roll
+  market
+  trade
+  auction
+}
+
+enum ReleaseVia {
+  system_sell
+  market
+  trade
+}
+
+/// «Паспорт» номера: все периоды владения.
+model PlateOwnership {
+  id            String      @id @default(cuid())
+  plateId       String
+  userId        String
+  acquiredAt    DateTime    @default(now())
+  acquiredVia   AcquireVia
+  acquiredPrice Int?
+  releasedAt    DateTime?
+  releasedVia   ReleaseVia?
+  releasedPrice Int?
+
+  plate Plate @relation(fields: [plateId], references: [id])
+  user  User  @relation(fields: [userId], references: [id])
+
+  @@index([plateId, acquiredAt])
+  @@index([userId])
+}
+
+enum ListingStatus {
+  active
+  sold
+  cancelled
+}
+
+model Listing {
+  id            String        @id @default(cuid())
+  plateId       String
+  sellerId      String
+  price         Int
+  status        ListingStatus @default(active)
+  /// Равен plateId, пока лот активен, иначе null: UNIQUE не даёт выставить номер дважды.
+  activePlateId String?       @unique
+  buyerId       String?
+  fee           Int?
+  createdAt     DateTime      @default(now())
+  closedAt      DateTime?
+
+  plate  Plate @relation(fields: [plateId], references: [id])
+  seller User  @relation("Seller", fields: [sellerId], references: [id])
+  buyer  User? @relation("Buyer", fields: [buyerId], references: [id])
+
+  @@index([status, price])
+  @@index([status, createdAt])
+  @@index([sellerId, status])
+}
+
+enum TradeStatus {
+  pending
+  accepted
+  declined
+  cancelled
+  expired
+}
+
+model TradeOffer {
+  id             String      @id @default(cuid())
+  code           String      @unique
+  fromUserId     String
+  /// null — предложение открыто любому, у кого есть ссылка (только если ничего не запрошено).
+  toUserId       String?
+  offeredChips   Int         @default(0)
+  requestedChips Int         @default(0)
+  message        String?
+  status         TradeStatus @default(pending)
+  acceptedById   String?
+  createdAt      DateTime    @default(now())
+  expiresAt      DateTime
+  closedAt       DateTime?
+
+  from  User        @relation("OfferFrom", fields: [fromUserId], references: [id])
+  to    User?       @relation("OfferTo", fields: [toUserId], references: [id])
+  items TradeItem[]
+
+  @@index([fromUserId, status])
+  @@index([toUserId, status])
+}
+
+enum TradeSide {
+  offered
+  requested
+}
+
+model TradeItem {
+  id      String    @id @default(cuid())
+  offerId String
+  plateId String
+  side    TradeSide
+
+  offer TradeOffer @relation(fields: [offerId], references: [id], onDelete: Cascade)
+  plate Plate      @relation(fields: [plateId], references: [id])
+
+  @@unique([offerId, plateId])
+}
+
+enum Currency {
+  chips
+  rolls
+}
+
+enum LedgerReason {
+  starting_bonus
+  roll_spend
+  roll_purchase
+  stars_purchase
+  daily_bonus
+  quest_reward
+  referral_reward
+  system_sell
+  market_buy
+  market_sale
+  trade
+  admin_adjust
+  car_purchase
+  car_system_sell
+  car_market_buy
+  car_market_sale
+  garage_slot
+  plate_fee
+  tuning
+  trip_income
+  race_bet
+  race_refund
+  race_win
+  auction_bid
+  auction_refund
+  exhibition_vote
+  prize
+  club_create
+}
+
+/// Журнал всех изменений баланса. balanceAfter позволяет восстановить историю при разборе жалоб.
+model LedgerEntry {
+  id           String       @id @default(cuid())
+  userId       String
+  currency     Currency
+  delta        Int
+  balanceAfter Int
+  reason       LedgerReason
+  refId        String?
+  note         String?
+  createdAt    DateTime     @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId, createdAt])
+  @@index([refId])
+}
+
+enum RollSource {
+  free
+  balance
+}
+
+model RollLog {
+  id            String     @id @default(cuid())
+  userId        String
+  plateId       String
+  plateKey      String
+  rolledTier    Tier
+  tier          Tier
+  value         Int
+  source        RollSource
+  configVersion Int
+  createdAt     DateTime   @default(now())
+
+  user  User  @relation(fields: [userId], references: [id])
+  plate Plate @relation(fields: [plateId], references: [id])
+
+  @@index([userId, createdAt])
+  @@index([createdAt])
+}
+
+enum DealType {
+  system_sell
+  market_sale
+  trade
+  auction
+  car_system_sell
+  car_market_sale
+}
+
+/// Журнал всех сделок с номерами и машинами.
+model DealLog {
+  id         String   @id @default(cuid())
+  type       DealType
+  plateKeys  String[]
+  carIds     String[] @default([])
+  fromUserId String?
+  toUserId   String?
+  price      Int?
+  fee        Int?
+  refId      String?
+  createdAt  DateTime @default(now())
+
+  @@index([fromUserId, createdAt])
+  @@index([toUserId, createdAt])
+  @@index([createdAt])
+}
+
+enum PaymentStatus {
+  pending
+  paid
+  refunded
+}
+
+enum PaymentKind {
+  rolls
+  car
+  paint
+  garage_slot
+}
+
+model Payment {
+  id               String        @id @default(cuid())
+  userId           String
+  kind             PaymentKind   @default(rolls)
+  /// Для rolls — id пакета, для car — id модели, для paint — id отделки, для garage_slot — "slot".
+  packId           String
+  /// Параметры покупки: цвет машины, id машины для покраски и т.п.
+  meta             Json?
+  stars            Int
+  rolls            Int           @default(0)
+  status           PaymentStatus @default(pending)
+  telegramChargeId String?       @unique
+  providerChargeId String?
+  createdAt        DateTime      @default(now())
+  paidAt           DateTime?
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId, createdAt])
+}
+
+model QuestProgress {
+  id        String    @id @default(cuid())
+  userId    String
+  questId   String
+  day       String
+  progress  Int       @default(0)
+  claimedAt DateTime?
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@unique([userId, questId, day])
+}
+
+// ---------- Машины ----------
+
+enum CarClass {
+  economy
+  comfort
+  business
+  premium
+  luxury
+  collectible
+}
+
+/// Модели салона. Синхронизируются из каталога @nomer/shared при старте API; sold ведёт сервер.
+model CarModel {
+  id           String   @id
+  brand        String
+  name         String
+  year         Int
+  class        CarClass
+  archetype    String
+  speed        Int
+  acceleration Int
+  handling     Int
+  prestige     Int
+  priceChips   Int
+  priceStars   Int?
+  /// always | rotating | limited
+  showroom     String
+  editionSize  Int?
+  /// Сколько экземпляров продано салоном (для счётчика тиража).
+  sold         Int      @default(0)
+  styleNumbers Int[]
+  season       String?
+  /// Модель убрана из каталога: новые не продаются, купленные остаются.
+  retired      Boolean  @default(false)
+  updatedAt    DateTime @updatedAt
+
+  cars UserCar[]
+}
+
+/// Экземпляр машины. Проданная системе машина остаётся строкой с ownerId = null — ради истории.
+model UserCar {
+  id             String    @id @default(cuid())
+  ownerId        String?
+  modelId        String
+  /// Номер экземпляра тиража у коллекционных моделей.
+  serial         Int?
+  /// CarTuning из @nomer/shared.
+  tuning         Json
+  /// Номер на машине. UNIQUE: номер висит максимум на одной машине.
+  plateId        String?   @unique
+  plateChangedAt DateTime?
+  acquiredAt     DateTime  @default(now())
+  createdAt      DateTime  @default(now())
+
+  owner      User?             @relation(fields: [ownerId], references: [id])
+  model      CarModel          @relation(fields: [modelId], references: [id])
+  plate      Plate?            @relation(fields: [plateId], references: [id])
+  ownerships CarOwnership[]
+  listings   CarListing[]
+  trips      CarTrip[]
+  raceEntry  RaceQueueEntry?
+  exhibitionEntries ExhibitionEntry[]
+
+  @@unique([modelId, serial])
+  @@index([ownerId])
+}
+
+enum CarAcquireVia {
+  showroom
+  market
+}
+
+enum CarReleaseVia {
+  system_sell
+  market
+}
+
+/// История владельцев машины.
+model CarOwnership {
+  id            String         @id @default(cuid())
+  carId         String
+  userId        String
+  acquiredAt    DateTime       @default(now())
+  acquiredVia   CarAcquireVia
+  acquiredPrice Int?
+  releasedAt    DateTime?
+  releasedVia   CarReleaseVia?
+  releasedPrice Int?
+
+  car  UserCar @relation(fields: [carId], references: [id])
+  user User    @relation(fields: [userId], references: [id])
+
+  @@index([carId, acquiredAt])
+  @@index([userId])
+}
+
+model CarListing {
+  id          String        @id @default(cuid())
+  carId       String
+  sellerId    String
+  price       Int
+  /// Продаётся вместе с номером, висевшим на машине в момент выставления.
+  withPlate   Boolean
+  status      ListingStatus @default(active)
+  /// Равен carId, пока лот активен: UNIQUE не даёт выставить машину дважды.
+  activeCarId String?       @unique
+  buyerId     String?
+  fee         Int?
+  createdAt   DateTime      @default(now())
+  closedAt    DateTime?
+
+  car    UserCar @relation(fields: [carId], references: [id])
+  seller User    @relation("CarSeller", fields: [sellerId], references: [id])
+  buyer  User?   @relation("CarBuyer", fields: [buyerId], references: [id])
+
+  @@index([status, createdAt])
+  @@index([sellerId, status])
+}
+
+enum TripStatus {
+  active
+  collected
+}
+
+/// Покатушки. Доход и событие определяются при старте, раскрываются по возвращении.
+model CarTrip {
+  id          String     @id @default(cuid())
+  carId       String
+  userId      String
+  hours       Int
+  startedAt   DateTime
+  endsAt      DateTime
+  baseIncome  Int
+  eventId     String?
+  income      Int
+  status      TripStatus @default(active)
+  /// Равен carId, пока доход не забран: машина не может уехать дважды.
+  activeCarId String?    @unique
+  collectedAt DateTime?
+
+  car  UserCar @relation(fields: [carId], references: [id])
+  user User    @relation(fields: [userId], references: [id])
+
+  @@index([userId, status])
+}
+
+/// Заявка в очереди дрэга. Ставка списана при входе в очередь.
+model RaceQueueEntry {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  carId     String   @unique
+  bet       Int
+  rating    Float
+  createdAt DateTime @default(now())
+
+  user User    @relation(fields: [userId], references: [id])
+  car  UserCar @relation(fields: [carId], references: [id])
+
+  @@index([bet, createdAt])
+}
+
+/// Заезд. Снимки участников (машина, тюнинг, номер, время) — для анимации и истории.
+model Race {
+  id           String   @id @default(cuid())
+  dayKey       String
+  weekKey      String
+  userAId      String
+  carAId       String
+  /// null — заезд против «призрака».
+  userBId      String?
+  carBId       String?
+  racerA       Json
+  racerB       Json
+  winnerSide   String
+  winnerUserId String?
+  bet          Int
+  fee          Int
+  createdAt    DateTime @default(now())
+
+  @@index([userAId, createdAt])
+  @@index([userBId, createdAt])
+  @@index([weekKey, winnerUserId])
+}
+
+enum AuctionStatus {
+  active
+  settled
+  unsold
+}
+
+/// Ежедневный номерной аукцион. Ставка лидера списана с его баланса, перебитая — возвращается.
+model Auction {
+  id             String        @id @default(cuid())
+  dayKey         String        @unique
+  plateId        String
+  startPrice     Int
+  currentBid     Int?
+  leaderId       String?
+  startsAt       DateTime
+  endsAt         DateTime
+  originalEndsAt DateTime
+  status         AuctionStatus @default(active)
+  settledAt      DateTime?
+
+  plate Plate        @relation(fields: [plateId], references: [id])
+  bids  AuctionBid[]
+
+  @@index([status, endsAt])
+}
+
+model AuctionBid {
+  id        String   @id @default(cuid())
+  auctionId String
+  userId    String
+  amount    Int
+  createdAt DateTime @default(now())
+
+  auction Auction @relation(fields: [auctionId], references: [id])
+  user    User    @relation(fields: [userId], references: [id])
+
+  @@index([auctionId, createdAt])
+}
+
+enum ExhibitionStatus {
+  open
+  settled
+}
+
+model Exhibition {
+  id        String           @id @default(cuid())
+  weekKey   String           @unique
+  status    ExhibitionStatus @default(open)
+  settledAt DateTime?
+
+  entries ExhibitionEntry[]
+  votes   ExhibitionVote[]
+}
+
+model ExhibitionEntry {
+  id           String   @id @default(cuid())
+  exhibitionId String
+  userId       String
+  carId        String
+  wins         Int      @default(0)
+  shows        Int      @default(0)
+  place        Int?
+  createdAt    DateTime @default(now())
+
+  exhibition Exhibition @relation(fields: [exhibitionId], references: [id])
+  user       User       @relation(fields: [userId], references: [id])
+  car        UserCar    @relation(fields: [carId], references: [id])
+
+  @@unique([exhibitionId, userId])
+  @@index([carId])
+}
+
+model ExhibitionVote {
+  id            String   @id @default(cuid())
+  exhibitionId  String
+  voterId       String
+  /// Пара машин в порядке id: "entryA:entryB" — за одну пару голос один.
+  pairKey       String
+  winnerEntryId String
+  rewarded      Boolean
+  dayKey        String
+  createdAt     DateTime @default(now())
+
+  exhibition Exhibition @relation(fields: [exhibitionId], references: [id])
+
+  @@unique([exhibitionId, voterId, pairKey])
+  @@index([voterId, dayKey])
+}
+
+model Club {
+  id        String   @id @default(cuid())
+  name      String
+  /// Имя в нижнем регистре — уникальность без учёта регистра.
+  nameKey   String   @unique
+  chatLink  String?
+  createdAt DateTime @default(now())
+
+  members ClubMember[]
+}
+
+enum ClubRole {
+  owner
+  member
+}
+
+model ClubMember {
+  userId   String   @id
+  clubId   String
+  role     ClubRole @default(member)
+  joinedAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+  club Club @relation(fields: [clubId], references: [id], onDelete: Cascade)
+
+  @@index([clubId])
+}
+
+/// «Номер мечты»: маска, по которой бот присылает уведомление о новом лоте.
+model DreamMask {
+  id         String   @id @default(cuid())
+  userId     String
+  mask       String
+  /// Шаблоны SQL LIKE (maskToSqlLike) — для обратного поиска масок по номеру.
+  bodyLike   String
+  regionLike String?
+  createdAt  DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@unique([userId, mask])
+}
+
+model UserAchievement {
+  userId        String
+  achievementId String
+  earnedAt      DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@id([userId, achievementId])
+}
+
+/// Разовые задачи планировщика ("tournament:2026-W43"): вставка ключа гарантирует, что задача выполнится один раз.
+model SchedulerRun {
+  key   String   @id
+  ranAt DateTime @default(now())
+}
+
+/// Версии конфига игры; активна последняя.
+model GameConfigVersion {
+  version   Int      @id @default(autoincrement())
+  data      Json
+  createdBy BigInt?
+  createdAt DateTime @default(now())
+}

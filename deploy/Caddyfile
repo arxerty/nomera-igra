@@ -1,0 +1,13 @@
+{$APP_DOMAIN} {
+	encode gzip
+
+	# Webhook Telegram → бот (BOT_WEBHOOK_URL=https://<домен>/telegram)
+	handle /telegram {
+		reverse_proxy bot:8080
+	}
+
+	# Mini App; nginx внутри web проксирует /api и /cards на API
+	handle {
+		reverse_proxy web:80
+	}
+}

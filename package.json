@@ -1,0 +1,39 @@
+{
+  "name": "nomerny-fart",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev:api": "npm run dev -w @nomer/api",
+    "dev:bot": "npm run dev -w @nomer/bot",
+    "dev:web": "npm run dev -w @nomer/web",
+    "db:migrate": "npm run db:migrate -w @nomer/api",
+    "db:seed": "npm run db:seed -w @nomer/api --",
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "test:int": "npm run test:int -w @nomer/api",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.2",
+    "vite": "^6.3.0",
+    "vitest": "^3.2.0"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "allowScripts": {
+    "prisma@6.19.3": true,
+    "@prisma/client@6.19.3": true,
+    "@prisma/engines@6.19.3": true,
+    "esbuild@0.21.5": true,
+    "esbuild@0.27.7": true,
+    "esbuild@0.28.2": true,
+    "msgpackr-extract": false,
+    "esbuild@0.25.12": true
+  }
+}

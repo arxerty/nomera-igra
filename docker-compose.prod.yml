@@ -1,0 +1,36 @@
+# Продакшен поверх docker-compose.yml:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+#
+# Caddy получает HTTPS-сертификат для APP_DOMAIN и отдаёт:
+#   https://APP_DOMAIN/          → Mini App (nginx, внутри проксирует /api и /cards на API)
+#   https://APP_DOMAIN/telegram  → webhook бота
+# Порты БД, Redis и API наружу не публикуются.
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:?Укажите APP_DOMAIN в .env}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - web
+      - bot
+
+  postgres:
+    ports: !reset []
+  redis:
+    ports: !reset []
+  api:
+    ports: !reset []
+  web:
+    ports: !reset []
+
+volumes:
+  caddy_data:
+  caddy_config:

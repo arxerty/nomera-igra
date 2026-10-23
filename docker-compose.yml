@@ -1,0 +1,83 @@
+# Локальный запуск:
+#   docker compose up -d postgres redis   — только БД и Redis (API запускается через npm run dev)
+#   docker compose up -d --build          — всё в контейнерах
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-nomer}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nomer}
+      POSTGRES_DB: ${POSTGRES_DB:-nomer}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-nomer} -d ${POSTGRES_DB:-nomer}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://${POSTGRES_USER:-nomer}:${POSTGRES_PASSWORD:-nomer}@postgres:5432/${POSTGRES_DB:-nomer}
+      REDIS_URL: redis://redis:6379
+      DEV_AUTH: "false"
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  bot:
+    build:
+      context: .
+      dockerfile: apps/bot/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      REDIS_URL: redis://redis:6379
+      API_INTERNAL_URL: http://api:3000
+    depends_on:
+      - api
+
+  # Mini App: статика + прокси /api и /cards на API. Для Telegram нужен HTTPS —
+  # направьте туннель (cloudflared/ngrok) или обратный прокси на порт 8081.
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8081:80"
+    depends_on:
+      - api
+
+volumes:
+  pgdata:
+  redisdata:
